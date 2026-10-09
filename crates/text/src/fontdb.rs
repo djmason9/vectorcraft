@@ -270,10 +270,9 @@ impl FontFace {
         use skrifa::raw::TableProvider;
         self.skrifa().and_then(|f| f.os2().ok()).map_or(0, |t| t.fs_type())
     }
-    /// May the font file be copied along with a document? Its license allows embedding its
-    /// outlines, as exports check it ([`Self::embedding`]).
+    /// May the font file be copied along with a document (its licence doesn't restrict embedding)?
     pub fn embeddable(&self) -> bool {
-        self.embedding() != crate::embed::Embedding::Forbidden
+        self.fs_type() & 0x000f != 0x0002
     }
     /// The face's index in its font file ([`Self::file_data`]; collections hold several).
     pub fn face_index(&self) -> u32 {
@@ -784,15 +783,9 @@ fn font_files(path: &Path) -> Vec<Vec<u8>> {
     std::fs::read(path).into_iter().collect()
 }
 
-/// The tables holding outlines the font engine draws: TrueType, CFF, CFF2 and VARC. A face with
-/// none of them (outlines in Apple's `hvgl` table, bitmaps only) draws nothing.
-#[cfg(not(target_arch = "wasm32"))]
-const OUTLINE_TABLES: [&[u8; 4]; 4] = [b"glyf", b"CFF ", b"CFF2", b"VARC"];
-
 /// The styles of every face in the font file at `path` ([`face_styles`]), reading only its table
 /// directories and `name` and `fvar` tables: a scan opens hundreds of font files, many of them
-/// megabytes long. Faces without outlines the font engine draws (no [`OUTLINE_TABLES`] table) are
-/// left out.
+/// megabytes long.
 #[cfg(not(target_arch = "wasm32"))]
 fn file_face_names(path: &Path) -> Vec<FaceStyle> {
     if crate::suitcase::is_suitcase(path) {
@@ -832,9 +825,6 @@ fn reader_face_names(mut file: impl std::io::Read + std::io::Seek) -> Vec<FaceSt
             let dir = read_at(start.into(), 12)?;
             let tables = u16::from_be_bytes(dir.get(4..6)?.try_into().ok()?) as usize;
             let records = read_at(u64::from(start) + 12, tables * 16)?;
-            if !records.as_chunks::<16>().0.iter().any(|r| OUTLINE_TABLES.iter().any(|t| r.starts_with(*t))) {
-                return None;
-            }
             let mut table = |tag: &[u8; 4]| -> Option<Vec<u8>> {
                 let rec: &[u8] = records.as_chunks::<16>().0.iter().find(|r| r.starts_with(tag))?;
                 let (offset, len) = (be32(rec, 8)?, be32(rec, 12)?);
@@ -900,9 +890,7 @@ static PLATFORM_FONT_FILES: std::sync::OnceLock<PlatformFontFiles> = std::sync::
 /// folders, asked again by each scan and each check for installed fonts
 /// ([`FontDb::installed_fonts_changed`]). The desktop app lists DirectWrite's system font
 /// collection on Windows: fonts a font service such as Adobe Fonts loads in place, from files
-/// outside the font folders and unknown to the registry (#579). On macOS it lists the fonts
-/// CoreText's font manager has available, which apps and font managers can register from any
-/// folder. Only the first call counts.
+/// outside the font folders and unknown to the registry (#579). Only the first call counts.
 pub fn set_platform_font_files(list: PlatformFontFiles) {
     #[cfg(not(target_arch = "wasm32"))]
     // A second call keeps the first lister, as documented.

@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 use vectorcraft_color::Paint;
 use vectorcraft_doc::{ColorMode, Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::{Affine, Rect};
-use vectorcraft_text::embed::Embedding;
 
 use super::*;
 
@@ -78,17 +77,13 @@ pub struct Section {
     pub rows: Vec<(String, String)>,
 }
 
-/// What a font's `fsType` lets a copy of it do, read as exports read it ([`Embedding`]): the
-/// most permissive usage bit wins, and bitmap-only fonts may not be embedded.
+/// What a font's `fsType` lets a copy of it do.
 pub fn embedding_label(fs_type: u16) -> &'static str {
-    if Embedding::from_fs_type(fs_type) == Embedding::Forbidden {
-        "embedding not allowed"
-    } else if fs_type & 0x0008 != 0 {
-        "embedding for editing"
-    } else if fs_type & 0x0004 != 0 {
-        "embedding for preview and print"
-    } else {
-        "embedding allowed"
+    match fs_type & 0x000f {
+        0x0002 => "embedding not allowed",
+        0x0004 => "embedding for preview and print",
+        0x0008 => "embedding for editing",
+        _ => "embedding allowed",
     }
 }
 
@@ -141,19 +136,13 @@ fn sections(d: &Document, info: &Value, fonts: &BTreeSet<(String, String)>, imag
                     fonts
                         .iter()
                         .map(|(family, style)| {
-                            // Found by any of its names; a style the family lacks shows in another.
-                            let detail = match db.resolve(family, style) {
-                                Some((f, m)) if m != vectorcraft_text::FontMatch::Missing => {
+                            let detail = match db.face(family, style) {
+                                Some(f) if f.family.eq_ignore_ascii_case(family) => {
                                     let file =
                                         f.path().and_then(|p| p.file_name()).map_or_else(|| "built in".into(), |n| n.to_string_lossy().into_owned());
-                                    let found = format!("{file}; {}", embedding_label(f.fs_type()));
-                                    if m == vectorcraft_text::FontMatch::Style {
-                                        format!("substituted: shown in {} {} ({found})", f.family, f.style)
-                                    } else {
-                                        found
-                                    }
+                                    format!("{file}; {}", embedding_label(f.fs_type()))
                                 }
-                                Some((f, _)) => format!("missing: shown in {} {}", f.family, f.style),
+                                Some(f) => format!("missing: shown in {} {}", f.family, f.style),
                                 None => "missing".into(),
                             };
                             (format!("{family} {style}"), detail)
@@ -407,12 +396,6 @@ mod tests {
         assert_eq!(embedding_label(0x0002), "embedding not allowed");
         assert_eq!(embedding_label(0x0004 | 0x0100), "embedding for preview and print");
         assert_eq!(embedding_label(0x0008), "embedding for editing");
-        // As exports read it: bitmap embedding only, the restricted bit with reserved bit 0, the
-        // most permissive of several usage bits.
-        assert_eq!(embedding_label(0x0200), "embedding not allowed");
-        assert_eq!(embedding_label(0x0003), "embedding not allowed");
-        assert_eq!(embedding_label(0x0006), "embedding for preview and print");
-        assert_eq!(embedding_label(0x000c), "embedding for editing");
     }
 
     #[test]
